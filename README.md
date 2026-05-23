@@ -1,4 +1,5 @@
-# Bachelor Thesis – Multimodal Human Robot Interaction
+# Bachelor Thesis – mart conversations: Enhancing robotic task execution through advanced language models
+
 
 ## Project Overview
 
