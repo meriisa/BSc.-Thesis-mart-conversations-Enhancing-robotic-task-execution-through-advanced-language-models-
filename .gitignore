@@ -1,0 +1,12 @@
+build/
+devel/
+logs/
+*.log
+*.pyc
+__pycache__/
+.env
+config.yaml
+*.code-workspace
+*.code-workspace
+unitree_ros/robots/go1_description/meshes/trunk.dae
+tcc_ros/src/tcc_ros/sam_vit_b_01ec64.pth
