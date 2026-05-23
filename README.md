@@ -1,4 +1,4 @@
-# Bachelor Thesis – mart conversations: Enhancing robotic task execution through advanced language models
+# Bachelor Thesis – Smart conversations: Enhancing robotic task execution through advanced language models
 
 
 ## Project Overview
