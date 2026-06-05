@@ -34,6 +34,41 @@ class DestinationResolver:
         self._all_aliases = list(set(all_aliases))
         self._fuzzy_cut   = fuzzy_cut
         self._embed_cut   = embed_cut
+        
+        # 29.06.2024: Added intent map for indirect commands.
+        # Additional semantic hints for indirect user commands.
+        # These are used when the user does not explicitly mention a room name.
+        # Example: "I am hungry" should resolve to "kitchen".
+        self.intent_map = {
+            "kitchen": [
+                "hungry", "food", "eat", "drink", "coffee", "tea",
+                "lunch", "dinner", "snack", "thirsty"
+            ],
+            "printing_room": [
+                "print", "printer", "printing", "scan", "copy", "paper",
+                "document"
+            ],
+            "conference_office": [
+                "meeting", "conference", "presentation", "discussion",
+                "group meeting"
+            ],
+            "professor_office": [
+                "professor", "supervisor", "advisor", "teacher",
+                "talk to professor", "ask professor"
+            ],
+            "toilet": [
+                "toilet", "bathroom", "restroom", "washroom"
+            ],
+            "server_room": [
+                "server", "computer", "it room", "network"
+            ],
+            "workshop": [
+                "workshop", "tools", "repair", "build", "fix"
+            ],
+            "elevator": [
+                "elevator", "lift", "upstairs", "downstairs"
+            ],
+        }
 
         # Sentence‑transformer embeddings
         self._model   = SentenceTransformer("paraphrase-MiniLM-L6-v2", device="cpu")
@@ -43,6 +78,16 @@ class DestinationResolver:
     def resolve(self, user_phrase: str):
         """Return (slug, how) or (None, reason)."""
         q = self._norm(user_phrase)
+
+        #29.06.2024: Added intent matching step before alias matching.
+        # Step 0: indirect intent matching.
+        # This handles sentences like:
+        # "I am hungry" -> kitchen
+        # "I need to print something" -> printing_room
+
+        intent_slug, intent_score = self._resolve_intent(q)
+        if intent_slug is not None:
+            return intent_slug, f"intent:{intent_score}"
 
         if q in self.alias_map:
             return self.alias_map[q], "exact"
@@ -59,4 +104,15 @@ class DestinationResolver:
         if sims[best] >= self._embed_cut:
             return self.alias_map[self._all_aliases[best]], f"embed:{sims[best]:.2f}"
         return None, "not_found"
+        
+        #29.06.2024: End of intent matching step.
+    def _resolve_intent(self, q: str):
+        best_slug, best_score = None, 0.0
+        for slug, keywords in self.intent_map.items():
+            for kw in keywords:
+                if kw in q:
+                    score = len(kw) / len(q)  # simple heuristic: longer match = stronger intent
+                    if score > best_score:
+                        best_slug, best_score = slug, score
+        return (best_slug, best_score) if best_slug else (None, 0.0)
 
