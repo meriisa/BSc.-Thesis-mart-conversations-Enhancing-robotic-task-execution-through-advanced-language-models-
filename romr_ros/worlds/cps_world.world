@@ -29925,5 +29925,7 @@
         <projection_type>perspective</projection_type>
       </camera>
     </gui>
+    <plugin name="line_drawing_plugin" filename="libline_drawing_plugin.so">
+  </plugin>
   </world>
 </sdf>

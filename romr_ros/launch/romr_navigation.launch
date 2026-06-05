@@ -8,8 +8,8 @@
   <!--*********** Launch the robot and the Gazebo world model ***********-->
   <include file="$(find romr_ros)/launch/romr_house.launch"/>
 
-  <!--*********** Map server ***********-->
- <node pkg="map_server" name="map_server" type="map_server" args="$(find romr_ros)/maps/cps_world.yaml"/>
+  <!--*********** Map server ***********  -->
+ <node pkg="map_server" name="map_server" type="map_server" args="$(find romr_ros)/maps/cps_world.yaml"/> 
   
   <!--*********** AMCL algorithm ***********-->  
   <include file="$(find romr_ros)/launch/amcl.launch"/> 
@@ -19,8 +19,8 @@
     <arg name="move_forward_only" value="$(arg move_forward_only)"/>
   </include>
 
-  <!--*********** OctoMap Node ***********-->
-  <include file="$(find romr_ros)/launch/octoMap.launch"/> 
+  <!--*********** OctoMap Node ***********
+  <include file="$(find romr_ros)/launch/octoMap.launch"/> -->
     
   <!--*********** Rviz ***********-->
   <group if="$(arg open_rviz)"> 
@@ -28,17 +28,17 @@
           args="-d $(find romr_ros)/config/romr_navigation.rviz"/>
   </group>   
   
-  <!--*********** GMapping node ***********
+  <!--*********** GMapping node *********** 
   <node pkg="gmapping" type="slam_gmapping" name="gmapping">
     <param name="base_frame" value="base_link"/>
     <param name="odom_frame" value="odom" />
     <param name="delta" value="0.1" />
   </node>  -->
   
-<!--*********** Object detection and segmentation model ***********
+<!--*********** Object detection and segmentation model ***********-->
   <include file="$(find ultralytics_ros)/launch/tracker.launch">
     <arg name="debug" value="true"/>
-  </include> -->
+  </include>
 
 </launch>
 

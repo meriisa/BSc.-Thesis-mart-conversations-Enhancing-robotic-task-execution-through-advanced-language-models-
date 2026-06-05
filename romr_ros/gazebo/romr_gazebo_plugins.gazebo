@@ -18,15 +18,15 @@
     <robotBaseFrame>base_link</robotBaseFrame>
     <odometrySource>1</odometrySource>
     <publishWheelTF>false</publishWheelTF>
-    <publishWheelJointState>false</publishWheelJointState>
+    <publishWheelJointState>true</publishWheelJointState>
     <publishOdom>true</publishOdom>
     <publishTf>1</publishTf>
    <publishOdomTF>true</publishOdomTF>
-    <publishWheelJointState>true</publishWheelJointState>
+   <!-- <publishWheelJointState>true</publishWheelJointState> -->
     <legacyMode>false</legacyMode>
      <alwaysOn>true</alwaysOn>
    <!-- <odometrySource>world</odometrySource> -->
-    <rosDebugLevel>Debug</rosDebugLevel>
+    <rosDebugLevel>INFO</rosDebugLevel>
     <broadcastTF>true</broadcastTF>
   </plugin>
 </gazebo>

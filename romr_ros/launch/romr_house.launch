@@ -1,14 +1,19 @@
 <?xml version="1.0" ?>
 
 <launch>
-	<param command="$(find xacro)/xacro $(find romr_ros)/urdf/romr_robot.xacro" name="robot_description"/>
+	<param name="robot_description"
+       command="$(find xacro)/xacro '$(find romr_ros)/urdf/romr_robot.xacro'" />
 
 	<!-- For cps world  -->
 	<arg name="x" default="0.0" />
 	<arg name="y" default="0.0" />
   	<arg name="z" default="0.0" /> 
 
-	<node args="-param robot_description -urdf -x $(arg x) -y $(arg y) -z $(arg z) -model romr_ros" name="spawn_urdf" pkg="gazebo_ros" type="spawn_model"/>
+	<node name="spawn_urdf"
+      pkg="gazebo_ros"
+      type="spawn_model"
+      args="-param robot_description -urdf -x 0.0 -y 0.0 -z 0.15 -model romr_ros"
+      output="screen" />
 
 	<node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher"/>
 	<node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher">
