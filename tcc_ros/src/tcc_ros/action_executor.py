@@ -16,6 +16,7 @@ from cv_bridge import CvBridge
 from std_msgs.msg import String
 from dynamic_reconfigure.client import Client
 from tcc_ros.destination_resolver import DestinationResolver
+from tcc_ros.yolo_v8_detector import YOLOv8Detector
 import rospkg, os
 
 class ActionExecutor:
@@ -44,10 +45,11 @@ class ActionExecutor:
         self.bridge = CvBridge()
         self.detected_objects = {}
         self.latest_detections = []
+        self.yolo_v8_detector = YOLOv8Detector()
         pkg_path  = rospkg.RosPack().get_path('tcc_ros')
         yaml_path = os.path.join(pkg_path, "config/config.yaml")
         self.dest_resolver = DestinationResolver(yaml_path)
-        self.perception_module = None
+        #self.perception_module = None
         self.emergency_stop = False
         self.emergency_stop_sub = rospy.Subscriber('/emergency_stop', String, self.handle_emergency_stop)
 
@@ -297,6 +299,12 @@ class ActionExecutor:
                 rospy.logwarn("[Perception] No objects detected at normal thresholds. Retrying with relaxed thresholds...")
                 detections = self.perception_module.detect_objects(prob_thresh=0.05, color_thresh=0.05)
             if not detections:
+                yolo_response = self.yolo_v8_detector.describe_detections()
+
+                if yolo_response != "No objects detected by YOLOv8.":
+                    self.speak_and_respond(yolo_response)
+                    return 
+                    
                 self.speak_and_respond("No objects detected in my surroundings.")
                 return
             self.latest_detections = detections

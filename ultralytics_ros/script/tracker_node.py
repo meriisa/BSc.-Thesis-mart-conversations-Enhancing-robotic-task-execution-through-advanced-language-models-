@@ -78,7 +78,9 @@ class TrackerNode:
                 detection.bbox.size_x = float(bbox[2])
                 detection.bbox.size_y = float(bbox[3])
                 hypothesis = ObjectHypothesisWithPose()
-                hypothesis.id = int(cls)
+                class_id = int(cls)
+                class_name = self.model.names[class_id]
+                hypothesis.id = class_name
                 hypothesis.score = float(conf)
                 detection.results.append(hypothesis)
                 detections_msg.detections.append(detection)
