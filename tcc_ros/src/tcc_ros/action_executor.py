@@ -290,44 +290,28 @@ class ActionExecutor:
             self.speak_and_respond(f"Failed to navigate around {object_name}.")
 
     def describe_and_update_surroundings(self):
-        try:
-            detections = self.perception_module.detect_objects(
-                prob_thresh=self.perception_module.detection_confidence_threshold,
-                color_thresh=self.perception_module.detection_confidence_threshold
-            )
-            if not detections:
-                rospy.logwarn("[Perception] No objects detected at normal thresholds. Retrying with relaxed thresholds...")
-                detections = self.perception_module.detect_objects(prob_thresh=0.05, color_thresh=0.05)
-            if not detections:
-                yolo_response = self.yolo_v8_detector.describe_detections()
+        """
+        Describes the robot's surroundings using the selected perception approach.
 
-                if yolo_response != "No objects detected by YOLOv8.":
-                    self.speak_and_respond(yolo_response)
-                    return 
-                    
-                self.speak_and_respond("No objects detected in my surroundings.")
+        Current experiment:
+        GPT-4 + YOLOv8
+
+        This method intentionally uses YOLOv8 directly instead of the original
+        SAM+CLIP perception module, so that YOLOv8 can be evaluated separately.
+        """
+
+        try:
+            yolo_response = self.yolo_v8_detector.describe_detections()
+
+            if yolo_response != "No objects detected by YOLOv8.":
+                self.speak_and_respond(yolo_response)
                 return
-            self.latest_detections = detections
-            response = []
-            for idx, det in enumerate(detections):
-                label = det.get('label', 'unknown')
-                pos = det.get('pose', None)
-                color = det.get('color', 'unknown')
-                confidence = det.get('confidence', 0.0)
-                if pos and hasattr(pos, 'pose'):
-                    response.append(
-                        f"{label} {idx+1}: at (x={pos.pose.position.x:.2f}, y={pos.pose.position.y:.2f}) with "
-                        f"confidence: {confidence * 100:.0f}% ." #, color: {color}"
-                    )
-                else:
-                    response.append(f"{label} {idx+1}: position unknown")
-            if response:
-                self.speak_and_respond("I can see:\n" + "\n".join(response))
-            else:
-                self.speak_and_respond("I looked around but could not confidently detect objects.")
+
+            self.speak_and_respond("No objects detected by YOLOv8.")
+
         except Exception as e:
-            rospy.logerr(f"Description failed: {str(e)}")
-            self.speak_and_respond("An error occurred while describing the surroundings.")
+            rospy.logerr(f"YOLOv8 description failed: {str(e)}")
+            self.speak_and_respond("An error occurred while describing the surroundings with YOLOv8.")
 
     def report_object_locations(self):
         try:

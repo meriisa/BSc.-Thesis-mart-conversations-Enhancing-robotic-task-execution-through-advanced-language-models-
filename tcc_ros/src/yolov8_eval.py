@@ -113,7 +113,7 @@ class YOLOv8Evaluator:
             else:
                 error_type = "false_positive"
 
-        with open(self.output_file, "a", newline="") as f:
+        with open(self.output_file, "a", newline="", encoding="utf-8", errors="replace") as f:
             writer = csv.writer(f)
             writer.writerow([
                 test_name,
@@ -129,7 +129,7 @@ class YOLOv8Evaluator:
             ])
 
         rospy.loginfo(
-            f"[YOLOv8 Eval] Test: {test_name} | "
+            f"Test: {test_name} | "
             f"Expected: {expected_object} | "
             f"Predicted: {predicted_label} | "
             f"Confidence: {confidence:.2f} | "
@@ -140,7 +140,7 @@ class YOLOv8Evaluator:
         )
 
     def run(self):
-        with open(self.output_file, "w", newline="") as f:
+        with open(self.output_file, "w", newline="", encoding="utf-8", errors="replace") as f:
             writer = csv.writer(f)
             writer.writerow([
                 "test_name",
