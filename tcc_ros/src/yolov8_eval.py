@@ -35,10 +35,10 @@ class YOLOv8Evaluator:
         self.bridge = CvBridge()
         self.latest_image = None
 
-        self.model = YOLO("yolov8s.pt")
+        self.model = YOLO("yolov8m.pt")
 
         self.image_topic = "/rgb/image"
-        self.output_file = "/root/yolov8s_results.csv"
+        self.output_file = "/root/yolov8m_results.csv"
 
         rospy.Subscriber(
             self.image_topic,
