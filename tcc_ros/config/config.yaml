@@ -21,8 +21,9 @@ models:
 topics:
   cmd_vel: "/cmd_vel"
   odom: "/odom"
-  camera_color: "/camera_face/color/image_raw"
-  camera_depth: "/camera_face/depth/image_raw"
+  camera_color: /rgb/image
+  camera_depth: /depth/image
+  camera_info: /rgb/camera_info
   move_base_client: "move_base"
 
 # Default speeds

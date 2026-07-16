@@ -5,8 +5,35 @@ logs/
 *.pyc
 __pycache__/
 .env
-config.yaml
 *.code-workspace
 *.code-workspace
 unitree_ros/robots/go1_description/meshes/trunk.dae
 tcc_ros/src/tcc_ros/sam_vit_b_01ec64.pth
+# Model weights
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Secrets
+.env
+.env.*
+secrets.yaml
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# ROS / Catkin generated files
+build/
+devel/
+install/
+log/
+logs/
+.catkin_tools/
+
+# Generated outputs
+runs/
+results/
+outputs/

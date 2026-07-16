@@ -7,7 +7,9 @@ import os
 import rospy
 from std_msgs.msg import String
 #from tcc_ros.vlm_node_YOLO import PerceptionModule
-from tcc_ros.vlm_node_SAM import PerceptionModule
+#from tcc_ros.vlm_node_SAM import PerceptionModule
+# new
+from tcc_ros.vlm_node_SAM3 import PerceptionModule
 from tcc_ros.llm_node import LLMInterface
 from tcc_ros.commands_parser import CommandParser
 from tcc_ros.action_executor import ActionExecutor
@@ -63,8 +65,19 @@ class RobotController:
         parsed_output = self.command_parser.parse_input(llm_output)
         if parsed_output['type'] == 'ACTIONS':
             actions = parsed_output['content']
-            valid_actions = [a for a in actions if ...]
-            self.action_executor.execute_actions(valid_actions)    
+            valid_actions = [
+                action for action in actions
+                if isinstance(action, dict) and action.get("action")
+            ]
+
+            if not valid_actions:
+                rospy.logwarn("No valid actions could be parsed from the LLM output.")
+                self.response_publisher.publish(
+                    String(data="I could not interpret the requested action.")
+                )
+                return
+
+            self.action_executor.execute_actions(valid_actions)   
         else:
             rospy.logwarn("Unexpected output type from LLM.")
 

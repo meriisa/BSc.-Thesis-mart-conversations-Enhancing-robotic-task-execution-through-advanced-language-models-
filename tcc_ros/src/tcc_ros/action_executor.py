@@ -5,18 +5,16 @@ Its usage is subject to the  Creative Commons Attribution International 4.0 Lice
 """
 import rospy
 import actionlib
-from geometry_msgs.msg import Twist, Quaternion, PoseStamped
+from geometry_msgs.msg import Twist, Quaternion
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from nav_msgs.msg import Odometry
 import tf
 import math
-import time
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from std_msgs.msg import String
 from dynamic_reconfigure.client import Client
 from tcc_ros.destination_resolver import DestinationResolver
-from tcc_ros.yolo_v8_detector import YOLOv8Detector
 import rospkg, os
 
 class ActionExecutor:
@@ -45,7 +43,6 @@ class ActionExecutor:
         self.bridge = CvBridge()
         self.detected_objects = {}
         self.latest_detections = []
-        self.yolo_v8_detector = YOLOv8Detector()
         pkg_path  = rospkg.RosPack().get_path('tcc_ros')
         yaml_path = os.path.join(pkg_path, "config/config.yaml")
         self.dest_resolver = DestinationResolver(yaml_path)
@@ -63,18 +60,27 @@ class ActionExecutor:
         self.response_publisher.publish(String(data=text))
         self.tts_publisher.publish(String(data=text))
 
-    def update_detected_objects(self):
-        raw_objects = self.perception_module.get_object_locations()
+    def update_detected_objects(self, object_queries=None):
+        raw_objects = self.perception_module.get_object_locations(object_queries)
+
         def normalize_label(label):
-            ignore_words = ["detected", "the", "a", "an", "object", "thing"]
-            for word in ignore_words:
-                label = label.replace(word, "")
-            return label.strip().lower()
+            text = str(label).lower().strip()
+            for prefix in ("detected ", "the ", "a ", "an "):
+                if text.startswith(prefix):
+                    text = text[len(prefix):].strip()
+            return " ".join(text.split())
+
         self.detected_objects = {}
-        for label, pose in raw_objects.items():
+
+        for label, instances in raw_objects.items():
             normalized_label = normalize_label(label)
-            self.detected_objects[normalized_label] = pose
-        rospy.loginfo(f"[ActionExecutor] Updated detected objects: {list(self.detected_objects.keys())}")
+            if normalized_label and instances:
+                self.detected_objects[normalized_label] = instances
+
+        rospy.loginfo(
+            f"[ActionExecutor] Updated detected objects: "
+            f"{list(self.detected_objects.keys())}"
+        )
 
     def execute_actions(self, actions):
         for idx, action in enumerate(actions, start=1):
@@ -97,17 +103,69 @@ class ActionExecutor:
                 self.send_image()
             elif action_type == 'NAVIGATE_TO_DESTINATION':
                 destination = action.get('destination_name')
-                detected_objects = self.perception_module.get_detected_objects() if self.perception_module else []
-                if destination.lower() in [obj.lower() for obj in detected_objects]:
-                    rospy.loginfo(f"Interpreting destination '{destination}' as a detected object.")
-                    self.execute_action({'action': 'MOVE_TO_OBJECT', 'object_name': destination})
+
+                if not destination:
+                    rospy.logwarn(
+                        "No destination provided for NAVIGATE_TO_DESTINATION action."
+                    )
                     return
+
+                destination = str(destination).strip().lower()
+
+                # Normalize phrases such as:
+                # "detected person", "the detected chair", "a person"
+                object_name = destination
+
+                for prefix in (
+                    "the detected ",
+                    "a detected ",
+                    "an detected ",
+                    "detected ",
+                    "the ",
+                    "a ",
+                    "an ",
+                ):
+                    if object_name.startswith(prefix):
+                        object_name = object_name[len(prefix):].strip()
+                        break
+
+                rospy.loginfo(
+                    f"[ActionExecutor] Resolving destination='{destination}', "
+                    f"normalized object='{object_name}'"
+                )
+
+                detected_objects = (
+                    self.perception_module.get_detected_objects([object_name])
+                    if self.perception_module
+                    else []
+                )
+
+                normalized_detections = [
+                    str(obj).lower().strip()
+                    for obj in detected_objects
+                ]
+
+                if object_name in normalized_detections:
+                    rospy.loginfo(
+                        f"[ActionExecutor] Interpreting '{destination}' "
+                        f"as detected object '{object_name}'."
+                    )
+
+                    self.execute_action({
+                        "action": "MOVE_TO_OBJECT",
+                        "object_name": object_name
+                    })
+                    return
+
                 speed = action.get('speed', None)
-                if destination:
-                    rospy.loginfo(f"Navigating to destination: {destination}")
-                    self.navigate_to(destination, speed=speed)
-                else:
-                    rospy.logwarn("No destination provided for NAVIGATE_TO_DESTINATION action.")
+
+                rospy.loginfo(
+                    f"[ActionExecutor] '{destination}' was not detected as an object. "
+                    "Trying fixed destination resolver."
+                )
+
+                self.navigate_to(destination, speed=speed)
+                
             elif action_type == 'GO_TO_COORDINATES':
                 coordinates = action.get('coordinates')
                 speed = action.get('speed', None)
@@ -162,24 +220,23 @@ class ActionExecutor:
                 self.report_orientation()
             elif action_type == 'MOVE_TO_OBJECT':
                 object_name = action.get('object_name')
-                if object_name.lower().startswith('detected '):
-                    object_name = object_name[9:].strip()
-                color = action.get('object_color', None)
-                rospy.loginfo(f"Attempting to move towards object: {object_name} (Color: {color})")
-                self.update_detected_objects()
-                detected_objects = self.detected_objects.get(object_name, [])
-                if color:
-                    obj_dict = next((obj for obj in detected_objects
-                                     if obj.get('color', '').lower() == color.lower()), None)
-                else:
-                    obj_dict = detected_objects[0] if detected_objects else None
-                if obj_dict:
-                    coords = {'x': obj_dict['x'], 'y': obj_dict['y'], 'z': obj_dict['z']}
-                    rospy.loginfo(f"Moving towards {object_name} at {coords}")
-                    self.send_navigation_goal_for_object(coords, object_name)
-                else:
-                    rospy.logwarn(f"Object '{object_name}' not found.")
-                    self.speak_and_respond(f"Object '{object_name}' not found.")
+
+                if not object_name:
+                    rospy.logwarn("MOVE_TO_OBJECT received without object_name.")
+                    self.speak_and_respond("No target object was specified.")
+                    return
+
+                object_name = object_name.strip().lower()
+
+                if object_name.startswith('detected '):
+                    object_name = object_name[len('detected '):].strip()
+
+                rospy.loginfo(
+                    f"[ActionExecutor] Attempting to move to object: {object_name}"
+                )
+
+                self.update_detected_objects([object_name])
+                self.send_navigation_goal_for_object(object_name)
             
             elif action_type == 'NAVIGATE_AROUND_OBJECT':
                 object_name = action.get('object_name')
@@ -220,47 +277,56 @@ class ActionExecutor:
 
     def send_navigation_goal_for_object(self, destination_label):
         try:
-            def normalize_label(label):
-                ignore_words = ["detected", "the", "a", "an", "object", "thing"]
-                for word in ignore_words:
-                    label = label.replace(word, "")
-                return label.strip().lower()
-            normalized_label = normalize_label(destination_label)
-            if not self.detected_objects:
-                rospy.logwarn("[ActionExecutor] No detected_objects cache — falling back to latest_detections.")
-                self.detected_objects = {}
-                for det in self.latest_detections:
-                    label = normalize_label(det.get("label", ""))
-                    pose = det.get("pose", None)
-                    if label and pose:
-                        self.detected_objects[label] = pose
-            if not self.detected_objects:
-                rospy.logwarn("[ActionExecutor] No detected objects available at all.")
-                self.speak_and_respond("I have no objects to navigate to.")
-                return
-            rospy.loginfo(f"[ActionExecutor] Available objects: {list(self.detected_objects.keys())}")
-            pose = self.detected_objects.get(normalized_label)
-            if not pose:
-                import difflib
-                candidates = list(self.detected_objects.keys())
-                best_match = difflib.get_close_matches(normalized_label, candidates, n=1)
-                if best_match:
-                    pose = self.detected_objects[best_match[0]]
-                    rospy.logwarn(f"[ActionExecutor] Approximated destination '{destination_label}' to '{best_match[0]}'.")
-                    normalized_label = best_match[0]
-            if not pose:
-                rospy.logwarn(f"[ActionExecutor] Destination '{destination_label}' not found after normalization.")
-                self.speak_and_respond(f"I couldn't find any object called {destination_label}.")
-                return
-            rospy.loginfo(f"[ActionExecutor] Navigating toward: {normalized_label}")
-            self.speak_and_respond(f"I'm heading toward the {normalized_label}.")
-            if self.move_to_pose(pose):
-                self.speak_and_respond(f"I have arrived at the {normalized_label}.")
-            else:
-                self.speak_and_respond(f"I couldn't reach the {normalized_label}.")
-        except Exception as e:
-            rospy.logerr(f"[ActionExecutor] Failed to send navigation goal: {str(e)}")
-            self.speak_and_respond("An error occurred while trying to navigate to the object.")
+            normalized_label = str(destination_label).lower().strip()
+
+            rospy.loginfo(
+                f"[ActionExecutor] Available objects: "
+                f"{list(self.detected_objects.keys())}"
+            )
+
+            instances = self.detected_objects.get(normalized_label, [])
+
+            if not instances:
+                rospy.logwarn(
+                    f"[ActionExecutor] Object '{destination_label}' not found."
+                )
+                self.speak_and_respond(
+                    f"I could not find the {destination_label}."
+                )
+                return False
+
+            target = max(
+                instances,
+                key=lambda item: item.get("confidence", 0.0)
+            )
+
+            coordinates = {
+                "x": target["x"],
+                "y": target["y"],
+                "z": target.get("z", 0.0),
+            }
+
+            rospy.loginfo(
+                f"[ActionExecutor] Navigating toward {normalized_label} "
+                f"at {coordinates}"
+            )
+            self.speak_and_respond(
+                f"I am heading toward the {normalized_label}."
+            )
+
+            return self.send_navigation_goal(
+                coordinates,
+                destination_name=normalized_label
+            )
+
+        except Exception as exc:
+            rospy.logerr(
+                f"[ActionExecutor] Object navigation failed: {exc}"
+            )
+            self.speak_and_respond(
+                "An error occurred while navigating to the object."
+            )
+            return False
 
     def navigate_around_object(self, object_name, clearance=0.5):
         try:
@@ -281,6 +347,7 @@ class ActionExecutor:
                 goal.target_pose.header.stamp = rospy.Time.now()
                 goal.target_pose.pose.position.x = wx
                 goal.target_pose.pose.position.y = wy
+                goal.target_pose.pose.position.z = 0.0
                 goal.target_pose.pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, 0))
                 self.move_base_client.send_goal(goal)
                 self.move_base_client.wait_for_result()
@@ -290,49 +357,83 @@ class ActionExecutor:
             self.speak_and_respond(f"Failed to navigate around {object_name}.")
 
     def describe_and_update_surroundings(self):
-        """
-        Describes the robot's surroundings using the selected perception approach.
-
-        Current experiment:
-        GPT-4 + YOLOv8
-
-        This method intentionally uses YOLOv8 directly instead of the original
-        SAM+CLIP perception module, so that YOLOv8 can be evaluated separately.
-        """
-
         try:
-            yolo_response = self.yolo_v8_detector.describe_detections()
+            labels = (
+                self.perception_module
+                .get_detected_objects()
+            )
 
-            if yolo_response != "No objects detected by YOLOv8.":
-                self.speak_and_respond(yolo_response)
+            if not labels:
+                rospy.loginfo(
+                    "[ActionExecutor] SAM3 detected "
+                    "no configured objects."
+                )
+
+                self.speak_and_respond(
+                    "I cannot currently detect any "
+                    "configured objects."
+                )
+
                 return
 
-            self.speak_and_respond("No objects detected by YOLOv8.")
+            unique_labels = sorted(
+                set(labels)
+            )
 
-        except Exception as e:
-            rospy.logerr(f"YOLOv8 description failed: {str(e)}")
-            self.speak_and_respond("An error occurred while describing the surroundings with YOLOv8.")
+            rospy.loginfo(
+                f"[ActionExecutor] SAM3 visually "
+                f"detected: {unique_labels}"
+            )
+
+            self.speak_and_respond(
+                "I can detect: "
+                + ", ".join(unique_labels)
+                + "."
+            )
+
+        except Exception as exc:
+            rospy.logerr(
+                "[ActionExecutor] SAM3 surroundings "
+                f"detection failed: {exc}"
+            )
+
+            self.speak_and_respond(
+                "An error occurred while detecting "
+                "the surroundings."
+            )
 
     def report_object_locations(self):
         try:
-            if not self.latest_detections:
-                self.speak_and_respond("I have not detected any objects yet.")
+            objects = self.perception_module.get_object_locations()
+
+            if not objects:
+                self.speak_and_respond(
+                    "I have not detected any objects yet."
+                )
                 return
-            response = "Here are the detected objects and their locations:\n"
-            for idx, det in enumerate(self.latest_detections):
-                label = det.get('label', 'unknown')
-                pose = det.get('pose', None)
-                if pose and hasattr(pose, 'pose'):
-                    x = pose.pose.position.x
-                    y = pose.pose.position.y
-                    z = pose.pose.position.z
-                    response += f"{label} {idx+1}: x={x:.2f}, y={y:.2f}, z={z:.2f}\n"
-                else:
-                    response += f"{label} {idx+1}: Location unknown\n"
-            self.speak_and_respond(response)
-        except Exception as e:
-            rospy.logerr(f"[ActionExecutor] Failed to report object locations: {str(e)}")
-            self.speak_and_respond("Something went wrong while retrieving object locations.")
+
+            response_lines = [
+                "Here are the detected objects and their locations:"
+            ]
+
+            for label, instances in sorted(objects.items()):
+                for index, instance in enumerate(instances, start=1):
+                    response_lines.append(
+                        f"{label} {index}: "
+                        f"x={instance['x']:.2f}, "
+                        f"y={instance['y']:.2f}, "
+                        f"z={instance.get('z', 0.0):.2f}"
+                    )
+
+            self.speak_and_respond("\n".join(response_lines))
+
+        except Exception as exc:
+            rospy.logerr(
+                f"[ActionExecutor] Failed to report object locations: {exc}"
+            )
+            self.speak_and_respond(
+                "Something went wrong while retrieving object locations."
+            )
 
     def move_forward(self, distance, speed=None):
         try:
@@ -554,48 +655,101 @@ class ActionExecutor:
 
     def send_navigation_goal(self, coordinates, destination_name=None, speed=None):
         try:
-            x, y, z = coordinates['x'], coordinates['y'], coordinates.get('z', 0.0)
-            self.speak_and_respond(f"Navigating to the {destination_name}."if destination_name else f"Sending navigation goal to the coordinates x={x}, y={y}, z={z}")
+            x = float(coordinates["x"])
+            y = float(coordinates["y"])
+            z = float(coordinates.get("z", 0.0))
+
+            if destination_name:
+                self.speak_and_respond(
+                    f"Navigating to the {destination_name}."
+                )
+            else:
+                self.speak_and_respond(
+                    f"Sending navigation goal to x={x}, y={y}, z={z}."
+                )
+
             if speed:
                 self.adjust_navigation_speed(speed)
+
             goal = MoveBaseGoal()
             goal.target_pose.header.frame_id = "map"
             goal.target_pose.header.stamp = rospy.Time.now()
             goal.target_pose.pose.position.x = x
             goal.target_pose.pose.position.y = y
-            goal.target_pose.pose.position.z = z
-            quaternion = tf.transformations.quaternion_from_euler(0, 0, 0)
-            goal.target_pose.pose.orientation = Quaternion(*quaternion)
+            goal.target_pose.pose.position.z = 0.0
+            goal.target_pose.pose.orientation = Quaternion(
+                *tf.transformations.quaternion_from_euler(0, 0, 0)
+            )
+
+            rospy.loginfo(
+                f"[ActionExecutor] Sending navigation goal: "
+                f"x={x:.2f}, y={y:.2f}, z={z:.2f}"
+            )
             self.move_base_client.send_goal(goal)
+
             rate = rospy.Rate(10)
             while not rospy.is_shutdown():
                 if self.emergency_stop:
-                    rospy.logwarn("Emergency stop detected, cancelling goal immediately.")
+                    rospy.logwarn(
+                        "Emergency stop detected, cancelling goal immediately."
+                    )
                     self.move_base_client.cancel_all_goals()
                     self.cmd_vel_publisher.publish(Twist())
-                    break
+                    if speed:
+                        self.reset_navigation_speed()
+                    return False
+
                 state = self.move_base_client.get_state()
-                if state in [actionlib.GoalStatus.SUCCEEDED,
-                            actionlib.GoalStatus.ABORTED,
-                            actionlib.GoalStatus.REJECTED,
-                            actionlib.GoalStatus.PREEMPTED]:
+                if state in [
+                    actionlib.GoalStatus.SUCCEEDED,
+                    actionlib.GoalStatus.ABORTED,
+                    actionlib.GoalStatus.REJECTED,
+                    actionlib.GoalStatus.PREEMPTED,
+                ]:
                     break
+
                 rate.sleep()
+
             if speed:
                 self.reset_navigation_speed()
+
             final_state = self.move_base_client.get_state()
+
             if final_state == actionlib.GoalStatus.SUCCEEDED:
                 rospy.loginfo("Navigation success.")
-                self.speak_and_respond(f"Arrived at {destination_name} successfully." if destination_name else "Navigation to the given coordinates was successful.")     
-            elif final_state == actionlib.GoalStatus.PREEMPTED:
-                rospy.loginfo("Navigation preempted (interrupted).")
+                if destination_name:
+                    self.speak_and_respond(
+                        f"Arrived at {destination_name} successfully."
+                    )
+                else:
+                    self.speak_and_respond(
+                        "Navigation to the given coordinates was successful."
+                    )
+                return True
+
+            if final_state == actionlib.GoalStatus.PREEMPTED:
+                rospy.loginfo("Navigation preempted.")
                 self.speak_and_respond("Navigation was interrupted.")
+                return False
+
+            rospy.logwarn(
+                f"Navigation failed with state {final_state}."
+            )
+            if destination_name:
+                self.speak_and_respond(
+                    f"Navigation to '{destination_name}' failed."
+                )
             else:
-                rospy.logwarn("Navigation failed.")
-                self.speak_and_respond(f"Navigation to '{destination_name}' failed." if destination_name else "Navigation to the given coordinates failed.")
-        except Exception as e:
-            rospy.logerr(f"Failed to send navigation goal: {e}")
-            raise e
+                self.speak_and_respond(
+                    "Navigation to the given coordinates failed."
+                )
+            return False
+
+        except Exception as exc:
+            rospy.logerr(f"Failed to send navigation goal: {exc}")
+            if speed:
+                self.reset_navigation_speed()
+            return False
 
     def report_coordinates(self):
         try:
