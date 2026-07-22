@@ -48,6 +48,12 @@ class TrackerNode:
             tracker=self.tracker,
             verbose=False,
         )
+        if results is not None and len(results) > 0:
+            rospy.loginfo(f"[TrackerNode] boxes: {len(results[0].boxes)}")
+            rospy.loginfo(f"[TrackerNode] classes: {results[0].boxes.cls}")
+            rospy.loginfo(f"[TrackerNode] confidences: {results[0].boxes.conf}")
+        else:
+            rospy.logwarn("[TrackerNode] No YOLO results returned.")
         self.publish_detection(results, header)
         self.publish_debug_image(results)
 
@@ -79,8 +85,7 @@ class TrackerNode:
                 detection.bbox.size_y = float(bbox[3])
                 hypothesis = ObjectHypothesisWithPose()
                 class_id = int(cls)
-                class_name = self.model.names[class_id]
-                hypothesis.id = class_name
+                hypothesis.id = class_id
                 hypothesis.score = float(conf)
                 detection.results.append(hypothesis)
                 detections_msg.detections.append(detection)
