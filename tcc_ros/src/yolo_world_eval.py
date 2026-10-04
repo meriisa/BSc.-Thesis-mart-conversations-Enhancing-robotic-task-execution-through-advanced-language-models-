@@ -19,84 +19,158 @@ class YOLOWorldEvaluator:
         # CvBridge converts ROS image messages into OpenCV images.
         self.bridge = CvBridge()
 
-        # This variable stores the latest image received from the camera topic.
+        # Stores the latest image received from the camera topic.
         self.latest_image = None
 
-        # Parameters are used to keep the script flexible.
-        # This allows testing small and medium models without changing the code.
-        self.model_name = rospy.get_param("~model_name", "yolov8m-world.pt")
-        self.image_topic = rospy.get_param("~image_topic", "/rgb/image")
-        self.output_file = rospy.get_param("~output_file", "/root/yolo_world_results.csv")
-        self.conf_threshold = rospy.get_param("~conf_threshold", 0.05)
+        # Parameters.
+        self.model_name = rospy.get_param(
+            "~model_name",
+            "yolov8m-world.pt"
+        )
+
+        self.image_topic = rospy.get_param(
+            "~image_topic",
+            "/rgb/image"
+        )
+
+        self.output_file = rospy.get_param(
+            "~output_file",
+            "/root/yolo_world_results.csv"
+        )
+
+        self.conf_threshold = rospy.get_param(
+            "~conf_threshold",
+            0.05
+        )
 
         # YOLO-World is evaluated as an open-vocabulary detector.
-        # The searched class is provided dynamically during each test case.
         self.model_type = "open_vocabulary_detection"
 
-        # Load the selected YOLO-World model.
-        rospy.loginfo(f"[YOLO-World Eval] Loading model: {self.model_name}")
+        # Load YOLO-World.
+        rospy.loginfo(
+            f"[YOLO-World Eval] Loading model: {self.model_name}"
+        )
+
         self.model = YOLOWorld(self.model_name)
 
-        # Subscribe to the camera image topic.
-        # Each new image updates self.latest_image.
+        # Explicitly move the model to the NVIDIA GPU.
+        self.model.to("cuda:0")
+
+        # Remember the currently configured text class.
+        # This prevents set_classes() from being called repeatedly
+        # for consecutive tests of the same object class.
+        self.current_class = None
+
+        # Subscribe to the simulated RGB camera.
         rospy.Subscriber(
             self.image_topic,
             Image,
-            self.image_callback
+            self.image_callback,
+            queue_size=1
         )
 
-        rospy.loginfo("[YOLO-World Eval] Waiting for camera image...")
+        rospy.loginfo(
+            "[YOLO-World Eval] Waiting for camera image..."
+        )
 
     def image_callback(self, msg):
-        # Convert the ROS image message into an OpenCV image.
-        # The detector works with OpenCV image arrays.
+        # Convert ROS image to OpenCV format.
         self.latest_image = self.bridge.imgmsg_to_cv2(
             msg,
             desired_encoding="bgr8"
         )
 
     def evaluate_once(self, test_name, expected_object):
-        # The model cannot be evaluated before the first camera image arrives.
+
+        # Evaluation requires a camera image.
         if self.latest_image is None:
-            rospy.logwarn("[YOLO-World Eval] No camera image received yet.")
+            rospy.logwarn(
+                "[YOLO-World Eval] No camera image received yet."
+            )
             return
 
-        # Normalize user input.
-        # This prevents problems caused by capital letters or spaces.
+        # Normalize object name.
         expected_object = expected_object.lower().strip()
 
-        # Set the searched class dynamically.
-        # This simulates the real robot use case:
-        # a user command defines the target object.
-        self.model.set_classes([expected_object])
+        # Only update the YOLO-World text prompt if the requested
+        # object class has changed.
+        if self.current_class != expected_object:
+            self.model.set_classes([expected_object])
+            self.current_class = expected_object
 
-        # Save the current image for documentation and later checking.
-        debug_image_path = f"/root/debug_{self.model_name}_{test_name}.jpg"
-        cv2.imwrite(debug_image_path, self.latest_image)
+        # Save the unannotated input image for documentation.
+        debug_image_path = (
+            f"/root/debug_{self.model_name}_{test_name}.jpg"
+        )
 
-        # Start time measurement directly before inference.
+        cv2.imwrite(
+            debug_image_path,
+            self.latest_image
+        )
+
+        # ---------------------------------------------------------
+        # GPU INFERENCE
+        # ---------------------------------------------------------
+
+        # Start timing immediately before model inference.
         start_time = time.time()
 
-        # Run YOLO-World on the latest camera image.
-        # The model searches only for the dynamically defined target class.
         results = self.model.predict(
             self.latest_image,
             conf=self.conf_threshold,
+            device=0,
             verbose=False
         )
 
-        # Calculate inference time in milliseconds.
-        inference_time_ms = (time.time() - start_time) * 1000
+        # Stop timing immediately after inference.
+        # Plotting and saving the annotated image are therefore
+        # not included in the measured inference time.
+        inference_time_ms = (
+            time.time() - start_time
+        ) * 1000
 
-        # Store all detections in a simple list.
+        # ---------------------------------------------------------
+        # SAVE ANNOTATED RESULT
+        # ---------------------------------------------------------
+
+        annotated_image = results[0].plot()
+
+        annotated_image_path = (
+            f"/root/yolo_world_"
+            f"{self.model_name}_{test_name}.jpg"
+        )
+
+        cv2.imwrite(
+            annotated_image_path,
+            annotated_image
+        )
+
+        rospy.loginfo(
+            f"Annotated image saved to: "
+            f"{annotated_image_path}"
+        )
+
+        # ---------------------------------------------------------
+        # PROCESS DETECTIONS
+        # ---------------------------------------------------------
+
         detections = []
 
-        # Extract the detected labels and confidence values.
         for result in results:
+
+            if result.boxes is None:
+                continue
+
             for box in result.boxes:
+
                 class_id = int(box.cls[0])
                 confidence = float(box.conf[0])
-                label = self.model.names[class_id].lower().strip()
+
+                label = (
+                    self.model.names[class_id]
+                    .lower()
+                    .strip()
+                )
 
                 detections.append({
                     "label": label,
@@ -105,37 +179,55 @@ class YOLOWorldEvaluator:
 
         print("ALL DETECTIONS:", detections)
 
-        # Default values if no object is detected.
+        # Default result if nothing was detected.
         predicted_label = "none"
         confidence = 0.0
         correct = False
 
-        # Since YOLO-World is only asked to search for the expected object,
-        # the best detection is used as the prediction.
+        # Use the detection with the highest confidence.
         if len(detections) > 0:
-            best_detection = max(detections, key=lambda x: x["confidence"])
+
+            best_detection = max(
+                detections,
+                key=lambda x: x["confidence"]
+            )
+
             predicted_label = best_detection["label"]
             confidence = best_detection["confidence"]
 
-            # The result is correct if the predicted label matches the target object.
             if predicted_label == expected_object:
                 correct = True
 
-        # Store additional information for later analysis.
         number_of_detections = len(detections)
-        all_detected_labels = "; ".join([det["label"] for det in detections])
 
-        # Classify the result type.
+        all_detected_labels = "; ".join(
+            [det["label"] for det in detections]
+        )
+
+        # Determine evaluation outcome.
         if correct:
             error_type = "true_positive"
+
         elif number_of_detections == 0:
             error_type = "false_negative"
+
         else:
             error_type = "false_positive"
 
-        # Write this test result into the CSV file.
-        with open(self.output_file, "a", newline="", encoding="utf-8", errors="replace") as f:
+        # ---------------------------------------------------------
+        # WRITE RESULT TO CSV
+        # ---------------------------------------------------------
+
+        with open(
+            self.output_file,
+            "a",
+            newline="",
+            encoding="utf-8",
+            errors="replace"
+        ) as f:
+
             writer = csv.writer(f)
+
             writer.writerow([
                 self.model_name,
                 self.model_type,
@@ -152,7 +244,7 @@ class YOLOWorldEvaluator:
                 debug_image_path
             ])
 
-        # Print the test result in the ROS terminal.
+        # Print result.
         rospy.loginfo(
             f"Model: {self.model_name} | "
             f"Test: {test_name} | "
@@ -165,10 +257,18 @@ class YOLOWorldEvaluator:
         )
 
     def run(self):
-        # Create the result CSV file and write the header row.
-        # The structure is kept equal to the YOLOv8 evaluator.
-        with open(self.output_file, "w", newline="", encoding="utf-8", errors="replace") as f:
+
+        # Create a fresh CSV file for this evaluation run.
+        with open(
+            self.output_file,
+            "w",
+            newline="",
+            encoding="utf-8",
+            errors="replace"
+        ) as f:
+
             writer = csv.writer(f)
+
             writer.writerow([
                 "model_name",
                 "model_type",
@@ -185,38 +285,73 @@ class YOLOWorldEvaluator:
                 "debug_image_path"
             ])
 
-        rospy.loginfo("[YOLO-World Eval] Ready.")
-        rospy.loginfo("Format: test_name expected_object")
-        rospy.loginfo("Example: bookshelf_front bookshelf")
-        rospy.loginfo("Example: trash_close trash bin")
-        rospy.loginfo("Type q to quit.")
+        rospy.loginfo(
+            "[YOLO-World Eval] Ready."
+        )
+
+        rospy.loginfo(
+            "GPU device: cuda:0"
+        )
+
+        rospy.loginfo(
+            "Format: test_name expected_object"
+        )
+
+        rospy.loginfo(
+            "Example: person_right_side person"
+        )
+
+        rospy.loginfo(
+            "Example: trash_front_close trash bin"
+        )
+
+        rospy.loginfo(
+            "Type q to quit."
+        )
 
         # Manual evaluation loop.
-        # The user enters one test case at a time.
         while not rospy.is_shutdown():
-            user_input = input("\nEnter test case: ")
 
-            # End the evaluation.
+            user_input = input(
+                "\nEnter test case: "
+            ).strip()
+
             if user_input.lower() == "q":
                 break
 
-            # Split into test name and expected object.
-            # maxsplit=1 is important for labels with spaces, e.g. "trash bin".
+            # maxsplit=1 allows object names containing spaces,
+            # e.g. "trash bin".
             parts = user_input.split(maxsplit=1)
 
             if len(parts) < 2:
-                print("Please enter: test_name expected_object")
-                print("Example: trash_close trash bin")
+
+                print(
+                    "Please enter: "
+                    "test_name expected_object"
+                )
+
+                print(
+                    "Example: "
+                    "trash_front_close trash bin"
+                )
+
                 continue
 
             test_name = parts[0]
             expected_object = parts[1]
 
-            self.evaluate_once(test_name, expected_object)
+            self.evaluate_once(
+                test_name,
+                expected_object
+            )
 
-        rospy.loginfo(f"[YOLO-World Eval] Results saved to {self.output_file}")
+        rospy.loginfo(
+            f"[YOLO-World Eval] "
+            f"Results saved to {self.output_file}"
+        )
 
 
 if __name__ == "__main__":
+
     evaluator = YOLOWorldEvaluator()
     evaluator.run()
